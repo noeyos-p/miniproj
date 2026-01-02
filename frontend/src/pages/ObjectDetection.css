@@ -1,0 +1,261 @@
+/* Blind Assistant 스타일 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body,
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #121212;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
+}
+
+/* 앱 컨테이너 */
+.blind-app {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+}
+
+/* 상태 텍스트 */
+.status-text {
+  color: white;
+  font-family: sans-serif;
+  font-size: 1.5rem;
+  text-align: center;
+  pointer-events: none;
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  right: 100px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 10px;
+  border-radius: 10px;
+  max-width: calc(100% - 140px);
+}
+
+/* 정보 버튼 */
+.info-button {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 60px;
+  height: 60px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(33, 150, 243, 0.9);
+  color: white;
+  cursor: pointer;
+  font-size: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.info-button:hover {
+  background: rgba(33, 150, 243, 1);
+  transform: scale(1.05);
+}
+
+.info-button:active {
+  transform: scale(0.95);
+}
+
+/* 비디오 컨테이너 */
+.video-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+}
+
+/* 카메라 프리뷰 */
+.camera-preview {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* 오버레이 캔버스 */
+.overlay-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* 컨트롤 패널 */
+.control-panel {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.85);
+  padding: 20px;
+  border-radius: 20px;
+  width: fit-content;
+  max-width: 95vw;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 컨트롤 버튼 */
+.control-btn {
+  width: 70px;
+  height: 70px;
+  border: none;
+  border-radius: 15px;
+  background: #333;
+  color: white;
+  cursor: pointer;
+  font-size: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.control-btn:hover {
+  background: #555;
+  transform: translateY(-2px);
+}
+
+.control-btn:active {
+  transform: scale(0.95);
+}
+
+/* 녹음 버튼 */
+.record-btn {
+  background: #2196F3 !important;
+  box-shadow: 0 0 15px rgba(33, 150, 243, 0.6);
+  border: 3px solid #fff;
+  color: white;
+  z-index: 2;
+}
+
+.record-btn:hover {
+  background: #42A5F5 !important;
+  transform: translateY(-2px);
+}
+
+.record-btn:active {
+  transform: scale(0.95);
+}
+
+.record-btn.recording {
+  background: #F44336 !important;
+  box-shadow: 0 0 20px rgba(244, 67, 54, 0.8);
+  animation: pulse 1s infinite;
+}
+
+/* 종료 버튼 */
+.exit-btn {
+  background: #444;
+}
+
+/* 펄스 애니메이션 */
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+/* 모바일 반응형 */
+@media screen and (max-width: 600px) {
+  .info-button {
+    width: 50px;
+    height: 50px;
+    font-size: 1.6rem;
+    top: 15px;
+    right: 15px;
+  }
+
+  .status-text {
+    font-size: 1.2rem;
+    left: 15px;
+    right: 80px;
+    max-width: calc(100% - 100px);
+  }
+
+  .control-panel {
+    bottom: 20px;
+    padding: 15px;
+    gap: 12px;
+  }
+
+  .control-btn {
+    width: 65px;
+    height: 65px;
+    font-size: 1.8rem;
+  }
+
+  .record-btn {
+    border-width: 2px;
+  }
+}
+
+/* 고대비 모드 */
+@media (prefers-contrast: high) {
+  .blind-app {
+    background-color: #000;
+  }
+
+  .control-btn {
+    border: 2px solid white;
+  }
+
+  .status-text {
+    background: rgba(0, 0, 0, 0.9);
+    border: 2px solid white;
+  }
+}
+
+/* 모션 감소 모드 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

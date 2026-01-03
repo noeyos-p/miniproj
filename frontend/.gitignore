@@ -1,0 +1,32 @@
+# 의존성
+node_modules
+
+# 빌드 결과물
+dist
+dist-ssr
+*.local
+
+# 환경 변수 (중요: 개발 환경 설정은 커밋하지 않음)
+.env.*
+.env.local
+.env.*.local
+
+# 에디터
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 로그
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*

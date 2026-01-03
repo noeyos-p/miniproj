@@ -1,5 +1,5 @@
 import os
-# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1' 지금 초기 여기로 되돌리기
+# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1' 
 # Mac 카메라권한 문제 관해 환경변수 추가 (Windows 주석처리)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Request, File, UploadFile, Response

@@ -122,18 +122,44 @@ function App() {
     };
   }, [speak]);
 
-  // 전역 더블 클릭 핸들러 (실행)
-  useEffect(() => {
-    const handleGlobalDoubleClick = () => {
-      if (pendingActionRef.current) {
-        pendingActionRef.current();
-        pendingActionRef.current = null;
-      }
-    };
-    window.addEventListener('dblclick', handleGlobalDoubleClick);
-    return () => window.removeEventListener('dblclick', handleGlobalDoubleClick);
-  }, []);
+  // 전역 더블 클릭/탭 핸들러 (실행)
+useEffect(() => {
+  let lastTap = 0;
 
+  const executeAction = () => {
+    if (pendingActionRef.current) {
+      pendingActionRef.current();
+      pendingActionRef.current = null;
+    }
+  };
+
+  // 데스크톱용 더블클릭
+  const handleGlobalDoubleClick = () => {
+    executeAction();
+  };
+
+  // 모바일용 더블탭
+  const handleTouchEnd = (e: TouchEvent) => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+
+    if (now - lastTap < DOUBLE_TAP_DELAY) {
+      e.preventDefault();
+      executeAction();
+      lastTap = 0; // 리셋
+    } else {
+      lastTap = now;
+    }
+  };
+
+  window.addEventListener('dblclick', handleGlobalDoubleClick);
+  window.addEventListener('touchend', handleTouchEnd, { passive: false });
+
+  return () => {
+    window.removeEventListener('dblclick', handleGlobalDoubleClick);
+    window.removeEventListener('touchend', handleTouchEnd);
+  };
+}, []);
   // 입력창 포커스 핸들러
   const handleInputFocus = useCallback(() => {
     speak('질문 입력창입니다. 궁금한 점을 입력해주세요.');

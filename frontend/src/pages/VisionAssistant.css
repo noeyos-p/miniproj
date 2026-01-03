@@ -41,6 +41,7 @@
 html {
   overflow-y: auto;
   overflow-x: hidden;
+  touch-action: manipulation; /* 브라우저 기본 더블탭 줌 비활성화 */
 }
 
 body {
@@ -53,8 +54,8 @@ body {
   /* 전체 페이지 스크롤 허용 */
   overflow-y: auto;
   overflow-x: hidden;
+  touch-action: manipulation; /* 브라우저 기본 더블탭 줌 비활성화 */
 }
-
 /* 스크린 리더 전용 */
 .sr-only {
   position: absolute;

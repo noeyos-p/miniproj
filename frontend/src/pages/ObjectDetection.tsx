@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import './ObjectDetection.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// 프로덕션: 빈 문자열(상대 경로), 개발: localhost:8000
+// const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
+const API_URL = import.meta.env.VITE_API_URL || '';
 const DOUBLE_CLICK_DELAY = 400;
 
 const FEATURE_GUIDE = `

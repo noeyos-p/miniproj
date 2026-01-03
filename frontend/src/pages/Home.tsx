@@ -7,6 +7,10 @@ function Home() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const pendingActionRef = useRef<(() => void) | null>(null);
 
+  // 더블탭 감지용
+  const lastTapRef = useRef<number>(0);
+  const DOUBLE_TAP_DELAY = 300; // 300ms 내에 두 번 탭하면 더블탭
+
   // TTS
   const speak = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) return;
@@ -33,7 +37,7 @@ function Home() {
     };
   }, [speak]);
 
-  // 전역 더블클릭 핸들러
+  // 전역 더블클릭 핸들러 (PC)
   const handleGlobalDoubleClick = useCallback(() => {
     if (pendingActionRef.current) {
       pendingActionRef.current();
@@ -41,8 +45,29 @@ function Home() {
     }
   }, []);
 
+  // 전역 더블탭 핸들러 (모바일)
+  const handleGlobalTouchStart = useCallback(() => {
+    const now = Date.now();
+    const timeSinceLastTap = now - lastTapRef.current;
+
+    if (timeSinceLastTap < DOUBLE_TAP_DELAY && timeSinceLastTap > 0) {
+      // 더블탭 감지!
+      if (pendingActionRef.current) {
+        pendingActionRef.current();
+        pendingActionRef.current = null;
+      }
+      lastTapRef.current = 0; // 리셋
+    } else {
+      lastTapRef.current = now;
+    }
+  }, []);
+
   return (
-    <div className="home-container" onDoubleClick={handleGlobalDoubleClick}>
+    <div
+      className="home-container"
+      onDoubleClick={handleGlobalDoubleClick}
+      onTouchStart={handleGlobalTouchStart}
+    >
       <header className="home-header">
         <h1>👁️ 시각 도우미</h1>
         <p className="subtitle">원하는 기능을 선택하세요</p>

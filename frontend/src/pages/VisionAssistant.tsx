@@ -30,7 +30,9 @@ declare global {
   }
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// 프로덕션: 빈 문자열(상대 경로), 개발: localhost:8000
+// const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 interface ConversationItem {
   type: 'question' | 'answer';
@@ -465,7 +467,8 @@ useEffect(() => {
     abortControllerRef.current = new AbortController();
 
     try {
-      const endpoint = mediaType === 'video' ? '/api/ask-video-stream' : '/api/ask-stream';
+      // const endpoint = mediaType === 'video' ? '/api/ask-video-stream' : '/api/ask-stream';  // 기존: 독립 서버용
+      const endpoint = mediaType === 'video' ? '/api/ask-video-stream' : '/api/ask-stream';  // 수정: 독립 서버는 /mini2 prefix 없음
       const body = mediaType === 'video'
         ? { video_base64: video, question: currentQuestion, language: 'ko' }
         : { image_base64: image, question: currentQuestion, language: 'ko' };
@@ -542,7 +545,8 @@ useEffect(() => {
     abortControllerRef.current = new AbortController();
 
     try {
-      const endpoint = mediaType === 'video' ? '/api/describe-video-stream' : '/api/describe-stream';
+      // const endpoint = mediaType === 'video' ? '/api/describe-video-stream' : '/api/describe-stream';  // 기존: 경로 오류
+      const endpoint = mediaType === 'video' ? '/api/describe-video-stream' : '/api/describe-stream';  // 수정: mini2 마운트 경로 반영
       const body = mediaType === 'video'
         ? { video_base64: video, question: '', language: 'ko' }
         : { image_base64: image, question: '', language: 'ko' };

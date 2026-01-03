@@ -1,11 +1,11 @@
 import os
-# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1'
+# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1' 지금 초기 여기로 되돌리기
 # Mac 카메라권한 문제 관해 환경변수 추가 (Windows 주석처리)
-
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Request, File, UploadFile, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 import numpy as np
-from fastapi.templating import Jinja2Templates
+#from fastapi.templating import Jinja2Templates
 from test_pipeline import MVPTestPipeline
 import threading
 import uvicorn
@@ -34,7 +34,21 @@ async def lifespan(app: FastAPI):
     pipeline.running = False
 
 app = FastAPI(lifespan=lifespan)
-templates = Jinja2Templates(directory="templates")
+#templates = Jinja2Templates(directory="templates")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+@app.get("/")
+def root():
+    return {"status": "backend running"}
 
 def generate_frames():
     """웹 스트리밍을 위한 이미지 인코딩 생성기"""
@@ -63,9 +77,9 @@ def generate_frames():
         else:
             time.sleep(0.1)
 
-@app.get("/", response_class=HTMLResponse)
-async def read_item(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+# @app.get("/", response_class=HTMLResponse)
+# async def read_item(request: Request):
+#     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/video_feed")
 async def video_feed():
@@ -92,7 +106,9 @@ async def start_pipeline():
             pipeline_thread.start()
             return {"status": "started"}
     return {"status": "already_running"}
-
+@app.post("/mini1/start")
+async def start_pipeline_alias():
+    return await start_pipeline()
 @app.post("/command")
 async def process_command(request: Request):
     data = await request.json()
@@ -169,8 +185,8 @@ async def process_frame(frame: UploadFile = File(...)):
 
 if __name__ == "__main__":
     # 템플릿 디렉토리가 없으면 생성
-    if not os.path.exists("templates"):
-        os.makedirs("templates")
+    #if not os.path.exists("templates"):
+    #    os.makedirs("templates")
     # access_log=False로 반복되는 /process_frame 로그 숨김
     # 서버 시작 등 중요한 로그는 표시됨
     uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)

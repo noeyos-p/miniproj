@@ -45,4 +45,4 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 
 # Windows TTS (Windows only - 주석 처리)
-# pywin32 
+pywin32 

@@ -135,7 +135,7 @@ class MVPTestPipeline:
         self.inference_size = (320, 320)
         self.frame_skip = 3
         self.frame_count = 0
-        self.K_DEPTH = 50.0  # Depth-Anything-V2용 최종 보정값 (실측 기반)
+        self.K_DEPTH = 100.0  # 실측 캘리브레이션 (0.5m→1.2m, 1m→2m, 2m→4~7m → 약 2배 보정)
         self.running = False  # 제어용 플래그
 
         # 음성 안내 설정 (볼륨 및 뮤트)
@@ -178,18 +178,37 @@ class MVPTestPipeline:
         self.label_cooldown = {}  # {label: last_announce_time}
         self.cooldown_time = 5.0  # 5초 쿨다운
 
+        # Track ID별 쿨다운 (같은 객체 반복 안내 방지)
+        self.track_id_cooldown = {}  # {track_id: last_announce_time}
+        self.track_cooldown_time = 15.0  # 같은 객체는 15초 동안 반복 안내 안 함
+
         # 웹 모드용 LLM 응답 캐시
         self.web_speech_cache = {}  # {entity_key: llm_generated_text}
         self.cache_lock = threading.Lock()
 
+        # GPU 디바이스 선택: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+            self.yolo_device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+            self.yolo_device = "mps"
+        else:
+            self.device = torch.device("cpu")
+            self.yolo_device = "cpu"
+
+        print(f"🚀 사용 디바이스: {self.device}")
+
         # 모델 로딩
+        # YOLOv8 Nano 모델 로드 (GPU 사용)
         self.yolo_model = YOLO('yolov8n.pt')
-        self.depth_model_type = "Depth-Anything-V2-Small"
+        self.yolo_model.to(self.yolo_device)
+        print(f"✅ YOLO 모델 로드 완료: {self.yolo_device}")
 
         # Depth-Anything-V2-Small 모델 로드
         from transformers import pipeline as hf_pipeline
         from PIL import Image as PILImage
-        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        self.depth_model_type = "Depth-Anything-V2-Small"
         print(f"Depth 모델 로딩 중: {self.depth_model_type} on {self.device}")
         self.depth_pipe = hf_pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf", device=self.device)
 
@@ -219,8 +238,11 @@ class MVPTestPipeline:
         }
 
         # Walking assistance ROI (Center 40%)
-        self.roi_x_min = 0.3
-        self.roi_x_max = 0.7
+        # self.roi_x_min = 0.3
+        # self.roi_x_max = 0.7
+        # 더 많은 객체 감지를 위해 ROI를 중앙 80%로 확장
+        self.roi_x_min = 0.1
+        self.roi_x_max = 0.9
 
         # Spatial Bucketing for entity differentiation
         self.DIST_BIN_SIZE = 1.5   # meters
@@ -372,8 +394,12 @@ class MVPTestPipeline:
         self.speech_queue.put((text, force_stop, is_follow_up))
 
     def stage2_yolo_optimized(self, frame):
-        results = self.yolo_model(frame, imgsz=320, verbose=False, conf=0.25)  # confidence threshold 낮춤
+        # ByteTrack 추적 사용
+        # results = self.yolo_model.track(frame, imgsz=320, verbose=False, conf=0.25, tracker="bytetrack.yaml", persist=True)
+        results = self.yolo_model.track(frame, imgsz=640, verbose=False, conf=0.20, tracker="bytetrack.yaml", persist=True)  # 가까운 객체 인식 개선: 해상도 640, confidence 0.20
         objects = []
+
+        h, w = frame.shape[:2] if len(frame.shape) == 3 else (frame.shape[0], frame.shape[1])
 
         for r in results:
             boxes = r.boxes
@@ -383,7 +409,26 @@ class MVPTestPipeline:
                 cls_id = int(box.cls[0])
                 model_label = self.yolo_model.names[cls_id]
                 ko_label = self.class_names_ko.get(model_label, model_label)
-                objects.append({'box': b, 'label': ko_label})
+
+                # Track ID 추출 (ByteTrack에서 제공)
+                track_id = None
+                if box.id is not None:
+                    track_id = int(box.id[0])
+
+                # 박스 크기 계산 (화면 대비 비율)
+                box_width = b[2] - b[0]
+                box_height = b[3] - b[1]
+                box_area_ratio = (box_width * box_height) / (w * h)
+
+                # 디버깅: 모든 감지된 객체 로그
+                print(f"[YOLO Debug] {ko_label} (conf:{conf:.2f}, size:{box_area_ratio*100:.1f}%, ID:{track_id})")
+
+                objects.append({
+                    'box': b,
+                    'label': ko_label,
+                    'track_id': track_id,
+                    'confidence': conf
+                })
         return objects
 
     def stage3_depth_optimized(self, frame):
@@ -458,9 +503,8 @@ class MVPTestPipeline:
         cv2.line(display_frame, (roi_left, 0), (roi_left, h), (0, 0, 255), 2)
         cv2.line(display_frame, (roi_right, 0), (roi_right, h), (0, 0, 255), 2)
 
-        # 가장 가까운 물체 찾기
-        closest_obj = None
-        min_meters = float('inf')
+        # ROI 내의 모든 감지된 객체 수집 (거리 10m 이내)
+        detected_objects = []
 
         for obj in self.last_objects:
             b = obj['box']
@@ -471,41 +515,66 @@ class MVPTestPipeline:
                 cx_d, cy_d = max(0, min(cx, w_d-1)), max(0, min(cy, h_d-1))
                 raw_val = self.last_depth_map[cy_d, cx_d]
                 meters = self.raw_to_meters(raw_val)
-                if meters < min_meters:
-                    min_meters = meters
-                    closest_obj = {
+
+                # 10m 이내의 객체만 추가
+                if meters < 10.0:
+                    detected_objects.append({
                         'label': obj['label'],
                         'box': b,
                         'meters': meters,
-                        'cx': cx
-                    }
-                    
-        # 감지된 객체 데이터 (클라이언트 렌더링용)
-        detection_data = None
+                        'cx': cx,
+                        'track_id': obj.get('track_id'),
+                        'confidence': obj.get('confidence', 0.0)
+                    })
 
+        # 거리 순으로 정렬 (가까운 순)
+        detected_objects.sort(key=lambda x: x['meters'])
+
+        # 감지된 객체 데이터 리스트 (클라이언트 렌더링용)
+        detection_data = []
         current_entities = set()
-        if closest_obj and min_meters < 10.0:
-            b = closest_obj['box']
+
+        # 모든 감지된 객체 처리
+        for detected_obj in detected_objects:
+            b = detected_obj['box']
+            label_name = detected_obj['label']
+            meters = detected_obj['meters']
+            track_id = detected_obj.get('track_id')
+
+            dist_bin = int(meters / self.DIST_BIN_SIZE)
+            pos_bin = int((detected_obj['cx'] / w) / self.POS_BIN_SIZE)
+            entity_key = (label_name, dist_bin, pos_bin)
+            current_entities.add(entity_key)
+
+            # 클라이언트 렌더링용 데이터 추가
+            detection_data.append({
+                'box': [int(b[0]), int(b[1]), int(b[2]), int(b[3])],
+                'label': str(label_name),
+                'distance': float(round(meters, 1)),
+                'roi': [int(roi_left), int(roi_right)],
+                'track_id': track_id,
+                'confidence': float(round(detected_obj.get('confidence', 0.0), 2))
+            })
+
+            # 서버 시각화 (노트북 모드용)
+            cv2.rectangle(display_frame, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 3)
+            # Track ID 표시 추가
+            label_text = f"{label_name} {meters:.1f}m"
+            if track_id is not None:
+                label_text = f"ID:{track_id} {label_name} {meters:.1f}m"
+            cv2.putText(display_frame, label_text, (b[0], b[1]-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+        # 음성 안내는 가장 가까운 객체만 (첫 번째 객체)
+        if detected_objects:
+            closest_obj = detected_objects[0]
             label_name = closest_obj['label']
             meters = closest_obj['meters']
+            track_id = closest_obj.get('track_id')
 
             dist_bin = int(meters / self.DIST_BIN_SIZE)
             pos_bin = int((closest_obj['cx'] / w) / self.POS_BIN_SIZE)
             entity_key = (label_name, dist_bin, pos_bin)
-            current_entities.add(entity_key)
-
-            # 클라이언트 렌더링용 데이터 (numpy → Python 기본 타입 변환)
-            detection_data = {
-                'box': [int(b[0]), int(b[1]), int(b[2]), int(b[3])],
-                'label': str(label_name),
-                'distance': float(round(meters, 1)),
-                'roi': [int(roi_left), int(roi_right)]
-            }
-
-            # 서버 시각화 (노트북 모드용)
-            cv2.rectangle(display_frame, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 3)
-            cv2.putText(display_frame, f"{label_name} {meters:.1f}m", (b[0], b[1]-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
             # --- Rapid Approach Detection (Independent of Cooldown) ---
             if entity_key in self.entity_velocity_history:
@@ -516,32 +585,35 @@ class MVPTestPipeline:
                     if meters < self.APPROACH_THRESHOLD_DIST and approach_speed >= self.APPROACH_THRESHOLD_SPEED:
                         warning_msg = f"위험! {label_name}이 매우 빠르게 접근 중입니다."
                         print(f"[RapidApproach] Speed: {approach_speed:.2f} m/s, Dist: {meters:.1f}m. Triggering Warning.")
-                        # 변경: 웹 모드일 때는 speech_text로 반환, 아니면 speak 호출
                         if self.web_mode:
                             speech_text = warning_msg
                         else:
                             self.speak(warning_msg, force_stop=True)
-            
+
             # Update velocity history every frame for tracking
             self.entity_velocity_history[entity_key] = (meters, current_time)
 
-            # 음성 안내 (라벨 쿨다운 체크, 뮤트 상태 체크)
-            # 라벨별 쿨다운 체크
+            # 음성 안내 (Track ID 쿨다운 우선, 라벨 쿨다운 체크, 뮤트 상태 체크)
             can_announce = True
-            if label_name in self.label_cooldown:
-                if (current_time - self.label_cooldown[label_name]) < self.cooldown_time:
-                    can_announce = False  # 쿨다운 중
 
-            # 변경: LLM 생성 시작 (쿨다운 갱신은 실제 재생할 때만)
+            # Track ID가 있으면 Track ID 쿨다운 체크 (같은 객체는 15초 동안 반복 안 함)
+            if track_id is not None and track_id in self.track_id_cooldown:
+                if (current_time - self.track_id_cooldown[track_id]) < self.track_cooldown_time:
+                    can_announce = False
+            # Track ID가 없거나 쿨다운이 아니면 라벨 쿨다운 체크
+            elif label_name in self.label_cooldown:
+                if (current_time - self.label_cooldown[label_name]) < self.cooldown_time:
+                    can_announce = False
+
+            # LLM 생성 시작
             if can_announce and not self.is_muted:
-                # label_cooldown 갱신은 하지 않음 (실제 재생할 때 갱신)
                 pos_desc = "정면"
                 if closest_obj['cx'] < roi_left + (roi_right - roi_left) * 0.3:
                     pos_desc = "왼쪽"
                 elif closest_obj['cx'] > roi_left + (roi_right - roi_left) * 0.7:
                     pos_desc = "오른쪽"
 
-                # 비동기 LLM 생성 시작 (별도 스레드)
+                # 비동기 LLM 생성 시작
                 llm_thread = threading.Thread(
                     target=self._generate_web_llm_async,
                     args=(entity_key, label_name, meters, pos_desc),
@@ -549,11 +621,15 @@ class MVPTestPipeline:
                 )
                 llm_thread.start()
 
-            # 변경: 라벨 쿨다운을 활용하여 중복 재생 방지
-            # entity_key는 거리 변화에 따라 바뀌므로, label_name 기준으로 체크
+            # Track ID 쿨다운을 활용하여 중복 재생 방지
             can_play = True
-            if label_name in self.label_cooldown:
-                # 마지막 재생 후 쿨다운 시간이 지나지 않았으면 재생 안 함
+
+            # Track ID가 있으면 Track ID 쿨다운 체크
+            if track_id is not None and track_id in self.track_id_cooldown:
+                if (current_time - self.track_id_cooldown[track_id]) < self.track_cooldown_time:
+                    can_play = False
+            # Track ID가 없거나 쿨다운이 아니면 라벨 쿨다운 체크
+            elif label_name in self.label_cooldown:
                 if (current_time - self.label_cooldown[label_name]) < self.cooldown_time:
                     can_play = False
 
@@ -561,22 +637,24 @@ class MVPTestPipeline:
                 with self.cache_lock:
                     if entity_key in self.web_speech_cache:
                         speech_text = self.web_speech_cache[entity_key]
-                        # 재생했으므로 announced_objects에 추가
                         self.announced_objects[entity_key] = current_time
-                        # 라벨 쿨다운 갱신 (중복 재생 방지)
                         self.label_cooldown[label_name] = current_time
-                        print(f"[Web TTS] 캐시에서 음성 재생: {speech_text}")
+                        # Track ID 쿨다운 업데이트
+                        if track_id is not None:
+                            self.track_id_cooldown[track_id] = current_time
+                        print(f"[Web TTS] 캐시에서 음성 재생: {speech_text} (ID:{track_id})")
                     else:
-                        # 캐시 없으면 기본 텍스트 (LLM 생성 중)
                         pos_desc = "정면"
                         if closest_obj['cx'] < roi_left + (roi_right - roi_left) * 0.3:
                             pos_desc = "왼쪽"
                         elif closest_obj['cx'] > roi_left + (roi_right - roi_left) * 0.7:
                             pos_desc = "오른쪽"
                         speech_text = f"{pos_desc} {meters:.1f}미터에 {label_name}"
-                        # 기본 텍스트도 재생했으므로 쿨다운 갱신
                         self.label_cooldown[label_name] = current_time
-                        print(f"[Web TTS] 기본 음성 재생: {speech_text}")
+                        # Track ID 쿨다운 업데이트
+                        if track_id is not None:
+                            self.track_id_cooldown[track_id] = current_time
+                        print(f"[Web TTS] 기본 음성 재생: {speech_text} (ID:{track_id})")
 
         # 오래된 객체 정리
         for entity_key in list(self.announced_objects.keys()):

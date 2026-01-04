@@ -159,14 +159,23 @@ def clean_translation(text: str) -> str:
 def load_models():
     """모델 로드"""
     global vl_model, vl_processor, translator, translator_tokenizer, device
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # GPU 디바이스 선택: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
     print(f"🖥️ Using device: {device}")
-    
+
     if device == "cuda":
         torch.cuda.empty_cache()
         gc.collect()
         print(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+    elif device == "mps":
+        print(f"🍎 Apple Silicon GPU (MPS) 사용")
     
     try:
         # VL 모델
@@ -179,19 +188,22 @@ def load_models():
         )
         vl_model = Qwen2VLForConditionalGeneration.from_pretrained(
             VL_MODEL_ID,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.float16 if device in ["cuda", "mps"] else torch.float32,
             device_map="auto" if device == "cuda" else None,
             trust_remote_code=True,
         )
+        # MPS 디바이스로 이동
+        if device == "mps":
+            vl_model = vl_model.to(device)
         print("✅ VL model loaded!")
-        
+
         # 번역 모델
         print(f"📦 Loading translator: {TRANSLATOR_MODEL_ID}")
         from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
-        
+
         translator_tokenizer = M2M100Tokenizer.from_pretrained(TRANSLATOR_MODEL_ID)
         translator = M2M100ForConditionalGeneration.from_pretrained(TRANSLATOR_MODEL_ID)
-        if device == "cuda":
+        if device in ["cuda", "mps"]:
             translator = translator.to(device)
         print("✅ Translator loaded!")
         print("🚀 All models ready!")

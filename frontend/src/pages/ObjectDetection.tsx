@@ -26,8 +26,10 @@ const FEATURE_GUIDE = `
 interface Detection {
   box: [number, number, number, number];
   label: string;
-  distance: string;
+  distance: number;
   roi: [number, number];
+  track_id?: number;
+  confidence?: number;
 }
 
 interface FrameSize {
@@ -67,26 +69,37 @@ function ObjectDetection() {
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // 오버레이에 감지 결과 그리기
-  const drawDetection = useCallback((detection: Detection | null, frameSize: FrameSize) => {
+  // 오버레이에 감지 결과 그리기 (다중 객체 지원)
+  const drawDetection = useCallback((detections: Detection[] | null, frameSize: FrameSize) => {
     const canvas = overlayCanvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      console.log('[Draw Debug] Canvas ref가 없음');
+      return;
+    }
 
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      console.log('[Draw Debug] Context를 가져올 수 없음');
+      return;
+    }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (!detection) return;
+    console.log('[Draw Debug] detections:', detections);
+    console.log('[Draw Debug] frameSize:', frameSize);
 
-    const { box, label, distance, roi } = detection;
-    const [x1, y1, x2, y2] = box;
-    const [roiLeft, roiRight] = roi;
+    if (!detections || detections.length === 0) {
+      console.log('[Draw Debug] 감지된 객체 없음');
+      return;
+    }
+
+    console.log('[Draw Debug] 객체 그리기 시작 - 총', detections.length, '개');
 
     const scaleX = canvas.width / frameSize.width;
     const scaleY = canvas.height / frameSize.height;
 
-    // ROI 가이드 라인
+    // ROI 가이드 라인 (첫 번째 객체의 ROI 사용)
+    const [roiLeft, roiRight] = detections[0].roi;
     ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -96,15 +109,24 @@ function ObjectDetection() {
     ctx.lineTo(roiRight * scaleX, canvas.height);
     ctx.stroke();
 
-    // 감지 박스
-    ctx.strokeStyle = 'rgba(255, 0, 0, 1)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+    // 모든 감지된 객체 그리기
+    detections.forEach((detection) => {
+      const { box, label, distance, track_id } = detection;
+      const [x1, y1, x2, y2] = box;
 
-    // 레이블
-    ctx.fillStyle = 'rgba(255, 0, 0, 1)';
-    ctx.font = '20px Arial';
-    ctx.fillText(`${label} ${distance}m`, x1 * scaleX, (y1 - 10) * scaleY);
+      // 감지 박스
+      ctx.strokeStyle = 'rgba(255, 0, 0, 1)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+
+      // 레이블 (Track ID 포함)
+      ctx.fillStyle = 'rgba(255, 0, 0, 1)';
+      ctx.font = '20px Arial';
+      const labelText = track_id !== undefined && track_id !== null
+        ? `ID:${track_id} ${label} ${distance}m`
+        : `${label} ${distance}m`;
+      ctx.fillText(labelText, x1 * scaleX, (y1 - 10) * scaleY);
+    });
   }, []);
 
   // 프레임 캡처 및 전송
@@ -141,6 +163,11 @@ function ObjectDetection() {
 
       if (response.ok) {
         const data = await response.json();
+        // 디버깅: 받은 데이터 확인
+        console.log('[Frontend Debug] 받은 데이터:', data);
+        console.log('[Frontend Debug] detection 타입:', typeof data.detection, Array.isArray(data.detection));
+        console.log('[Frontend Debug] detection 내용:', data.detection);
+
         drawDetection(data.detection, data.frame_size);
 
         if (data.speech && data.speech.length > 0) {

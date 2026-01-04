@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, AsyncGenerator
 
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -245,6 +245,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Vision Assistant API", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# mini1 파이프라인 통합
+mini1_pipeline = None
+try:
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "mini1"))
+    from test_pipeline import MVPTestPipeline
+    mini1_pipeline = MVPTestPipeline(web_mode=True)
+    print("✅ mini1 파이프라인이 로드되었습니다.")
+except Exception as e:
+    print(f"⚠️ mini1 파이프라인 로드 실패: {e}")
 
 
 class QuestionRequest(BaseModel):
@@ -548,6 +559,116 @@ async def describe_video_stream(request: VideoQuestionRequest):
         if video_path and os.path.exists(video_path):
             os.remove(video_path)
         return AnswerResponse(answer="오류가 발생했어요.", success=False, error=str(e))
+
+
+# =============================================
+# mini1 API 엔드포인트 (객체 감지 + Depth Estimation)
+# =============================================
+
+@app.post("/mini1/start")
+async def mini1_start():
+    """mini1 파이프라인 시작"""
+    print(f"[mini1] /start 요청 받음 (pipeline={mini1_pipeline is not None})")
+
+    if mini1_pipeline is None:
+        print("[mini1] ⚠️ 파이프라인이 None입니다!")
+        return {"status": "error", "message": "mini1 파이프라인이 로드되지 않았습니다."}
+
+    print(f"[mini1] 현재 running 상태: {mini1_pipeline.running}")
+
+    if not mini1_pipeline.running:
+        print("[mini1] ✅ 파이프라인 시작 중...")
+        mini1_pipeline.running = True
+        return {"status": "started"}
+
+    print("[mini1] ⚠️ 이미 실행 중입니다")
+    return {"status": "already_running"}
+
+
+@app.post("/mini1/stop")
+async def mini1_stop():
+    """mini1 파이프라인 정지"""
+    if mini1_pipeline is None:
+        return {"status": "error", "message": "mini1 파이프라인이 로드되지 않았습니다."}
+
+    if mini1_pipeline.running:
+        print("[mini1] 파이프라인 정지 요청")
+        mini1_pipeline.running = False
+        mini1_pipeline.speak("시스템을 정지합니다.", force_stop=True)
+        return {"status": "stopped"}
+    return {"status": "already_stopped"}
+
+
+@app.post("/mini1/process_frame")
+async def mini1_process_frame(frame: UploadFile = File(...)):
+    """모바일 카메라 프레임 처리"""
+    if mini1_pipeline is None:
+        return Response(content=b'', status_code=500)
+
+    try:
+        import numpy as np
+        import cv2
+
+        # 이미지 데이터 읽기
+        contents = await frame.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return Response(content=b'', status_code=400)
+
+        # 파이프라인으로 프레임 처리
+        processed_img, speech_text, detection_data = mini1_pipeline.process_web_frame_with_speech(img)
+
+        return {
+            "detection": detection_data,
+            "speech": speech_text,
+            "frame_size": {"width": img.shape[1], "height": img.shape[0]}
+        }
+
+    except Exception as e:
+        print(f"[mini1] 프레임 처리 오류: {e}")
+        return Response(content=b'', status_code=500)
+
+
+@app.post("/mini1/voice")
+async def mini1_voice(audio: UploadFile = File(...)):
+    """웹에서 녹음된 음성 파일 인식"""
+    if mini1_pipeline is None:
+        return {"status": "error", "text": "mini1 파이프라인이 로드되지 않았습니다."}
+
+    try:
+        import tempfile
+        import whisper
+
+        # Whisper 모델 로드 (캐시됨)
+        if not hasattr(mini1_voice, 'whisper_model'):
+            mini1_voice.whisper_model = whisper.load_model("tiny")
+
+        # 임시 파일로 저장
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+            content = await audio.read()
+            f.write(content)
+            temp_path = f.name
+
+        # Whisper로 음성 인식
+        result = mini1_voice.whisper_model.transcribe(temp_path, language="ko", fp16=False)
+        text = result["text"].strip()
+
+        # 임시 파일 삭제
+        os.unlink(temp_path)
+
+        print(f"[mini1] 음성 인식 결과: {text}")
+
+        # 명령어 처리
+        response_text = None
+        if text:
+            response_text = mini1_pipeline.handle_command(text)
+
+        return {"status": "success", "text": text, "response": response_text}
+    except Exception as e:
+        print(f"[mini1] 음성 인식 오류: {e}")
+        return {"status": "error", "text": str(e)}
 
 
 # =============================================

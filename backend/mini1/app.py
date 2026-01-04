@@ -1,6 +1,7 @@
 import os
-# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1' 
+# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1'
 # Mac 카메라권한 문제 관해 환경변수 추가 (Windows 주석처리)
+import platform
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Request, File, UploadFile, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -97,11 +98,13 @@ async def start_pipeline():
             return {"status": "started"}
         else:
             # 로컬 모드: run() 함수 실행 (서버 카메라 사용)
-            # Window cv2 사용가능 (주석해제)
-            pipeline_thread = threading.Thread(target=pipeline.run, daemon=True)
-
-            # Mac에서 스레드 내 cv2 창 불가로 headless=True 사용
-            # pipeline_thread = threading.Thread(target=lambda: pipeline.run(headless=True), daemon=True)
+            # OS별 자동 분기 처리
+            if platform.system() == "Darwin":  # macOS
+                # Mac에서는 스레드 내 cv2 창 불가로 headless=True 사용
+                pipeline_thread = threading.Thread(target=lambda: pipeline.run(headless=True), daemon=True)
+            else:  # Windows
+                # Windows에서는 cv2 창 사용 가능
+                pipeline_thread = threading.Thread(target=pipeline.run, daemon=True)
 
             pipeline_thread.start()
             return {"status": "started"}

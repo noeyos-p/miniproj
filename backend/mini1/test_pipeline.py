@@ -1,5 +1,5 @@
 import os
-# os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1'
+os.environ['OPENCV_AVFOUNDATION_SKIP_AUTH'] = '1'
 # Mac 카메라권한 문제 관해 환경변수 추가 (Windows 주석처리)
 
 import cv2
@@ -12,9 +12,14 @@ import json
 import platform
 import subprocess
 
-# Windows 전용 (Mac에서는 주석처리)
-import win32com.client
-import pythoncom
+# macOS/Windows 호환성
+WIN32COM_AVAILABLE = False
+try:
+    import win32com.client
+    import pythoncom
+    WIN32COM_AVAILABLE = True
+except ImportError:
+    print("Windows TTS 라이브러리(win32com)를 사용할 수 없습니다. macOS에서는 'say' 명령어를 사용합니다.")
 
 from ultralytics import YOLO
 from follow_up_service import FollowUpSpeechService
@@ -130,7 +135,7 @@ class MVPTestPipeline:
         self.inference_size = (320, 320)
         self.frame_skip = 3
         self.frame_count = 0
-        self.K_DEPTH = 3000.0
+        self.K_DEPTH = 50.0  # Depth-Anything-V2용 최종 보정값 (실측 기반)
         self.running = False  # 제어용 플래그
 
         # 음성 안내 설정 (볼륨 및 뮤트)
@@ -178,14 +183,15 @@ class MVPTestPipeline:
         self.cache_lock = threading.Lock()
 
         # 모델 로딩
-        self.yolo_model = YOLO('yolov8n.pt') 
-        self.depth_model_type = "MiDaS_small"
-        self.midas = torch.hub.load("intel-isl/MiDaS", self.depth_model_type, trust_repo=True)
+        self.yolo_model = YOLO('yolov8n.pt')
+        self.depth_model_type = "Depth-Anything-V2-Small"
+
+        # Depth-Anything-V2-Small 모델 로드
+        from transformers import pipeline as hf_pipeline
+        from PIL import Image as PILImage
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        self.midas.to(self.device).eval()
-        
-        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
-        self.transform = midas_transforms.small_transform if self.depth_model_type == "MiDaS_small" else midas_transforms.dpt_transform
+        print(f"Depth 모델 로딩 중: {self.depth_model_type} on {self.device}")
+        self.depth_pipe = hf_pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf", device=self.device)
 
         self.last_objects = []
         self.last_depth_map = None
@@ -227,13 +233,15 @@ class MVPTestPipeline:
 
     def _tts_worker(self):
         """별도 스레드에서 TTS 안내를 처리"""
-        # Windows용 (주석해제)
-        pythoncom.CoInitialize()
-        speaker = win32com.client.Dispatch("SAPI.SpVoice")
-        current_process = None  # Windows 모드에서도 초기화
-
-        # Mac용 (1줄) 현재 실행 중인 TTS 프로세스
-        # current_process = None
+        # Windows용
+        if WIN32COM_AVAILABLE:
+            pythoncom.CoInitialize()
+            speaker = win32com.client.Dispatch("SAPI.SpVoice")
+            current_process = None
+        else:
+            # macOS용: 'say' 명령어 사용
+            speaker = None
+            current_process = None
 
         while True:
             # 큐에서 데이터를 가져옴 (텍스트, 강제중지여부, follow_up여부)
@@ -254,20 +262,19 @@ class MVPTestPipeline:
 
             print(f"[TTS 발화 시작] {text} (강제종료: {force_stop}, 후속: {is_follow_up})")
             try:
-                # Windows 전용 (주석해제)
-                speaker.Volume = self.volume
-                flags = 2 if force_stop else 0
-                speaker.Speak(text, flags)
-
-                # Mac용: say 명령어 사용
-                # 볼륨은 0~100을 0~1로 변환
-                # volume_normalized = self.volume / 100.0
-                # current_process = subprocess.Popen(
-                #     ['say', '-v', 'Yuna', '-r', '200', text],
-                #     stdout=subprocess.DEVNULL,
-                #     stderr=subprocess.DEVNULL
-                # )
-                # current_process.wait() # 여기까지 주석처리
+                if WIN32COM_AVAILABLE:
+                    # Windows용: win32com 사용
+                    speaker.Volume = self.volume
+                    flags = 2 if force_stop else 0
+                    speaker.Speak(text, flags)
+                else:
+                    # macOS용: say 명령어 사용
+                    current_process = subprocess.Popen(
+                        ['say', '-v', 'Yuna', '-r', '200', text],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    current_process.wait()
 
             except Exception as e:
                 print(f"[TTS 오류] {e}")
@@ -365,11 +372,13 @@ class MVPTestPipeline:
         self.speech_queue.put((text, force_stop, is_follow_up))
 
     def stage2_yolo_optimized(self, frame):
-        results = self.yolo_model(frame, imgsz=320, verbose=False) 
+        results = self.yolo_model(frame, imgsz=320, verbose=False, conf=0.25)  # confidence threshold 낮춤
         objects = []
+
         for r in results:
             boxes = r.boxes
             for box in boxes:
+                conf = float(box.conf[0])
                 b = box.xyxy[0].cpu().numpy().astype(int)
                 cls_id = int(box.cls[0])
                 model_label = self.yolo_model.names[cls_id]
@@ -378,24 +387,27 @@ class MVPTestPipeline:
         return objects
 
     def stage3_depth_optimized(self, frame):
-        small_frame = cv2.resize(frame, (256, 256)) 
-        img = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-        input_batch = self.transform(img).to(self.device)
 
-        with torch.no_grad():
-            prediction = self.midas(input_batch)
-            prediction = torch.nn.functional.interpolate(
-                prediction.unsqueeze(1),
-                size=frame.shape[:2],
-                mode="bicubic",
-                align_corners=False,
-            ).squeeze()
+        # Depth-Anything-V2-Small 방식
+        from PIL import Image as PILImage
 
-        depth_map = prediction.cpu().numpy()
+        # BGR -> RGB 변환 후 PIL Image로 변환
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = PILImage.fromarray(rgb_frame)
+
+        # Depth estimation
+        result = self.depth_pipe(pil_image)
+        depth_map = np.array(result["depth"])
+
+        # 원본 프레임 크기로 리사이즈
+        if depth_map.shape[:2] != frame.shape[:2]:
+            depth_map = cv2.resize(depth_map, (frame.shape[1], frame.shape[0]))
+
+        # 시각화용 depth map 생성
         depth_min, depth_max = depth_map.min(), depth_map.max()
         depth_norm = (255 * (depth_map - depth_min) / (depth_max - depth_min + 1e-5)).astype(np.uint8)
         depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_MAGMA)
-        
+
         return depth_map, depth_color
 
     def raw_to_meters(self, raw_val):
@@ -454,13 +466,11 @@ class MVPTestPipeline:
             b = obj['box']
             cx = (b[0] + b[2]) // 2
             cy = int(b[3] * 0.9)
-
             if roi_left <= cx <= roi_right:
                 h_d, w_d = self.last_depth_map.shape
                 cx_d, cy_d = max(0, min(cx, w_d-1)), max(0, min(cy, h_d-1))
                 raw_val = self.last_depth_map[cy_d, cx_d]
                 meters = self.raw_to_meters(raw_val)
-
                 if meters < min_meters:
                     min_meters = meters
                     closest_obj = {
@@ -469,7 +479,7 @@ class MVPTestPipeline:
                         'meters': meters,
                         'cx': cx
                     }
-
+                    
         # 감지된 객체 데이터 (클라이언트 렌더링용)
         detection_data = None
 
@@ -601,7 +611,7 @@ class MVPTestPipeline:
                 return
 
         window_name_main = "MVP Test - Color (YOLO)"
-        window_name_depth = "MVP Test - Depth (MiDaS)"
+        window_name_depth = "MVP Test - Depth (Depth-Anything-V2-Small)"
 
         # GUI 모드일 때만 창 생성
         if not headless:

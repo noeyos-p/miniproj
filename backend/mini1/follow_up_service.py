@@ -1,11 +1,14 @@
 import requests
 import json
+import time
 
 class FollowUpSpeechService:
     def __init__(self, api_key="YOUR_OPENROUTER_API_KEY"):
         self.api_key = api_key
         self.url = "https://openrouter.ai/api/v1/chat/completions"
         self.model = "deepseek/deepseek-r1-0528:free"
+        self.spoken_objects = {}
+        self.cooldown_seconds = 10.0 
 
     def _sanitize_for_tts(self, text):
         """
@@ -30,6 +33,19 @@ class FollowUpSpeechService:
             distance (float): Distance in meters.
             position_desc (str): Relative position (e.g., '정면', '약간 왼쪽').
         """
+        now = time.time()
+
+        # 오브젝트 식별 키 (실시간 도보 보조 기준)
+        object_key = f"{object_label}-{position_desc}"
+
+        last_time = self.spoken_objects.get(object_key)
+
+        # ⛔ 이미 경고했고 아직 10초 안 지났으면 말 안 함
+        if last_time and (now - last_time) < self.cooldown_seconds:
+            return None
+
+        # ✅ 말하기로 결정 → 시간 기록
+        self.spoken_objects[object_key] = now
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

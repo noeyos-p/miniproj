@@ -135,7 +135,11 @@ class MVPTestPipeline:
         self.inference_size = (320, 320)
         self.frame_skip = 3
         self.frame_count = 0
-        self.K_DEPTH = 100.0  # 실측 캘리브레이션 (0.5m→1.2m, 1m→2m, 2m→4~7m → 약 2배 보정)
+        # self.K_DEPTH = 100.0  # 실측 캘리브레이션 (0.5m→1.2m, 1m→2m, 2m→4~7m → 약 2배 보정)
+        # 거리별 캘리브레이션: 가까운 거리와 먼 거리에 다른 보정값 적용
+        self.K_DEPTH_NEAR = 40.0   # 1m 미만 (가까운 거리용)
+        self.K_DEPTH_FAR = 100.0   # 1m 이상 (먼 거리용, 기존 값)
+        self.DISTANCE_THRESHOLD = 100.0  # raw_val 기준: 이 값보다 크면 가까운 거리
         self.running = False  # 제어용 플래그
 
         # 음성 안내 설정 (볼륨 및 뮤트)
@@ -457,7 +461,13 @@ class MVPTestPipeline:
 
     def raw_to_meters(self, raw_val):
         if raw_val <= 0: return float('inf')
-        meters = self.K_DEPTH / (raw_val + 1e-5)
+
+        # 구간별 보정: raw_val이 크면 가까운 거리 (K_DEPTH_NEAR 사용)
+        if raw_val > self.DISTANCE_THRESHOLD:
+            meters = self.K_DEPTH_NEAR / (raw_val + 1e-5)
+        else:
+            meters = self.K_DEPTH_FAR / (raw_val + 1e-5)
+
         return meters
     
     # 모바일 카메라 및 음성
